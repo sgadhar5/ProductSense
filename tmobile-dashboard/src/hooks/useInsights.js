@@ -15,13 +15,35 @@ export const useInsights = () => {
       setSummary(s.data);
       setLoading(false);
     } catch (e) {
-      console.error(e);
+      console.error("❌ Failed to refresh insights:", e);
     }
   };
 
+  // Initial load
   useEffect(() => {
     refresh();
   }, []);
+
+  // 🔄 Auto-refresh + auto-ingest every 5 minutes
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      console.log("🔄 Auto-ingesting new data...");
+
+      try {
+        // hit backend to ingest new Reddit / Twitter / Play Store items
+        await api.post("/ingest/all");
+        console.log("✨ New data ingested. Refreshing UI...");
+
+        // reload dashboard data
+        await refresh();
+
+      } catch (err) {
+        console.error("❌ Auto-ingest failed:", err);
+      }
+    }, 5 * 60 * 1000); // 5 minutes
+
+    return () => clearInterval(interval);
+  }, [refresh]);
 
   return { recent, summary, loading, refresh };
 };

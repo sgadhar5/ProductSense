@@ -56,10 +56,3 @@ def keyword_summary(limit: int = 5):
     return [{"topic": word, "count": count} for word, count in common]
 
 
-import requests
-from scrapers.collector import scrape_all
-
-data = scrape_all()
-for item in data:
-    res = requests.post("http://127.0.0.1:8000/analyze", json=item)
-    print(res.status_code, res.json())
