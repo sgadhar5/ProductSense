@@ -1,12 +1,48 @@
-.page {
+/* GLOBAL WRAPPER FOR ALL PAGES */
+.page-container {
     width: 100%;
+    max-width: 100%;
     display: flex;
     justify-content: center;
+    padding: 16px;
+    box-sizing: border-box;
   }
   
-  .page-inner {
+  /* MAIN DASHBOARD BODY (white box) */
+  .dashboard-container {
     width: 100%;
-    max-width: 1300px;     /* This controls consistent width across all pages */
-    padding: 20px 32px 40px;
+    max-width: 750px;          /* fits laptop screens cleanly */
+    background: rgb(255, 255, 255);
+    padding: 20px;
+    border-radius: 14px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    box-sizing: border-box;
+  
+    /* Prevents cards from stretching vertically too much */
+    min-height: calc(100vh - 140px);
+  }
+  
+  /* METRICS ROW */
+  .metrics-row {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  
+  /* Metric Cards */
+  .metric-card {
+    background: rgb(255, 255, 255);
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  }
+  
+  /* RECENT TABLE BOX */
+  .recent-container {
+    margin-top: 24px;
+    background: white;
+    padding: 16px;
+    border-radius: 12px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
   }
   

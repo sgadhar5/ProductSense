@@ -867,6 +867,191 @@ def backlog_update(item_id: int, data: dict):
 
     return {"success": True}
 
+
+# ======== ANALYTICS ENDPOINTS ========
+
+from datetime import datetime, timedelta
+
+def _to_iso(ts: float | str) -> str:
+    if isinstance(ts, str):
+        return ts
+    return datetime.utcfromtimestamp(ts).isoformat()
+
+@app.get("/insights/sentiment_score")
+def insights_sentiment_score():
+    """
+    Returns:
+      {
+        overall: float (0..1),
+        delta_24h: float (difference vs previous 24h),
+        high_severity: int (last 24h),
+        outages: int (last 24h),
+        trend: [24 floats]  # hourly sentiment over last 24h
+      }
+    """
+    conn = db()
+    cur = conn.cursor()
+
+    now = datetime.utcnow()
+    t0 = (now - timedelta(hours=24)).isoformat()
+    tprev0 = (now - timedelta(hours=48)).isoformat()
+    tprev1 = (now - timedelta(hours=24)).isoformat()
+
+    # Overall (last 24h)
+    cur.execute("""
+        SELECT COUNT(*),
+               SUM(CASE WHEN sentiment_label='Positive' THEN 1
+                        WHEN sentiment_label='Neutral' THEN 0.5
+                        ELSE 0 END)
+        FROM insights
+        WHERE timestamp >= ?
+    """, (t0,))
+    total_24h, pos_like_24h = cur.fetchone()
+    total_24h = total_24h or 0
+    pos_like_24h = pos_like_24h or 0.0
+    overall = round(pos_like_24h / total_24h, 3) if total_24h else None
+
+    # Previous 24h window
+    cur.execute("""
+        SELECT COUNT(*),
+               SUM(CASE WHEN sentiment_label='Positive' THEN 1
+                        WHEN sentiment_label='Neutral' THEN 0.5
+                        ELSE 0 END)
+        FROM insights
+        WHERE timestamp >= ? AND timestamp < ?
+    """, (tprev0, tprev1))
+    total_prev, pos_like_prev = cur.fetchone()
+    total_prev = total_prev or 0
+    pos_like_prev = pos_like_prev or 0.0
+    prev_overall = (pos_like_prev / total_prev) if total_prev else None
+    delta = round((overall - prev_overall), 3) if (overall is not None and prev_overall is not None) else None
+
+    # High severity + outage counts (last 24h)
+    cur.execute("SELECT COUNT(*) FROM insights WHERE severity='high' AND timestamp >= ?", (t0,))
+    high_sev = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT COUNT(*) FROM insights WHERE topic='outage' AND timestamp >= ?", (t0,))
+    outages = cur.fetchone()[0] or 0
+
+    # Hourly trend (24 buckets)
+    trend = []
+    for h in range(24):
+        start = (now - timedelta(hours=24-h))
+        end   = (now - timedelta(hours=23-h))
+        cur.execute("""
+            SELECT COUNT(*),
+                   SUM(CASE WHEN sentiment_label='Positive' THEN 1
+                            WHEN sentiment_label='Neutral' THEN 0.5
+                            ELSE 0 END)
+            FROM insights
+            WHERE timestamp >= ? AND timestamp < ?
+        """, (start.isoformat(), end.isoformat()))
+        c, pl = cur.fetchone()
+        c = c or 0
+        pl = pl or 0.0
+        trend.append(round(pl / c, 3) if c else None)
+
+    conn.close()
+    return {
+        "overall": overall,
+        "delta_24h": delta,
+        "high_severity": high_sev,
+        "outages": outages,
+        "trend": trend
+    }
+
+
+@app.get("/insights/source_counts")
+def insights_source_counts():
+    """
+    Returns total + last 24h counts by source.
+    """
+    conn = db()
+    cur = conn.cursor()
+    now = datetime.utcnow()
+    t0 = (now - timedelta(hours=24)).isoformat()
+
+    sources = ["twitter", "reddit_post", "reddit_comment", "playstore"]
+    data = {}
+    for s in sources:
+        cur.execute("SELECT COUNT(*) FROM insights WHERE source=?", (s,))
+        total = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM insights WHERE source=? AND timestamp >= ?", (s, t0))
+        last24 = cur.fetchone()[0] or 0
+        data[s] = {"total": total, "last24h": last24}
+    conn.close()
+    return data
+
+
+@app.get("/insights/trending_issues")
+def insights_trending_issues(limit: int = 3):
+    """
+    Top topics last 24h by volume.
+    """
+    conn = db()
+    cur = conn.cursor()
+    t0 = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+    cur.execute("""
+        SELECT topic, COUNT(*) as c
+        FROM insights
+        WHERE timestamp >= ?
+        GROUP BY topic
+        ORDER BY c DESC
+        LIMIT ?
+    """, (t0, limit))
+    rows = cur.fetchall()
+    conn.close()
+
+    return [{"topic": r[0], "count": r[1]} for r in rows if r[0]]
+
+
+@app.get("/insights/negative_recent")
+def insights_negative_recent(limit: int = 12):
+    """
+    Recent negative/high-severity/outage items for the spotlight strip.
+    """
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT source, sentiment_label, topic, severity, text, timestamp, url
+        FROM insights
+        WHERE sentiment_label='Negative'
+           OR severity='high'
+           OR topic='outage'
+        ORDER BY timestamp DESC
+        LIMIT ?
+    """, (limit,))
+    rows = cur.fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        out.append({
+            "source": r[0], "sentiment": r[1], "topic": r[2], "severity": r[3],
+            "text": r[4], "timestamp": r[5], "url": r[6]
+        })
+    return out
+
+
+@app.get("/insights/outage_regions")
+def insights_outage_regions(limit: int = 10):
+    """
+    Counts by location for outage-tagged items (last 72h).
+    """
+    conn = db()
+    cur = conn.cursor()
+    t0 = (datetime.utcnow() - timedelta(hours=72)).isoformat()
+    cur.execute("""
+        SELECT COALESCE(location, 'Unknown') as loc, COUNT(*) as c
+        FROM insights
+        WHERE topic='outage' AND timestamp >= ?
+        GROUP BY loc
+        ORDER BY c DESC
+        LIMIT ?
+    """, (t0, limit))
+    rows = cur.fetchall()
+    conn.close()
+    return [{"location": r[0], "count": r[1]} for r in rows]
+
 @app.delete("/backlog/{item_id}")
 def backlog_delete(item_id: int):
     conn = db()

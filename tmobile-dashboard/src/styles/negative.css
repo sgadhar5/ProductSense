@@ -1,0 +1,23 @@
+.neg-strip {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(260px, 1fr);
+    gap: 12px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .neg-card {
+    display: flex; flex-direction: column; gap: 8px;
+    background: #fff; border-radius: 14px; padding: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+    text-decoration: none; color: inherit;
+  }
+  .neg-top { display: flex; justify-content: space-between; font-size: 12px; color: #6b7280; }
+  .sev.high { color: #dc2626; font-weight: 700; }
+  .neg-body { font-size: 14px; }
+  .neg-meta { display: flex; justify-content: space-between; font-size: 12px; }
+  .sent.negative { color: #dc2626; font-weight: 700; }
+  .sent.neutral { color: #f59e0b; font-weight: 700; }
+  .sent.positive { color: #16a34a; font-weight: 700; }
+  .topic { text-transform: capitalize; }
+  

@@ -1,0 +1,48 @@
+.exec-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  
+  .exec-card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 16px 18px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+  }
+  
+  .exec-title {
+    font-size: 12px;
+    color: #6b7280;
+    margin-bottom: 6px;
+    letter-spacing: .02em;
+  }
+  
+  .exec-metric {
+    font-size: 28px;
+    font-weight: 800;
+    line-height: 1.2;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  
+  .exec-metric.good { color: #16a34a; }   /* green */
+  .exec-metric.warn { color: #f59e0b; }   /* amber */
+  .exec-metric.bad  { color: #dc2626; }   /* red  */
+  .exec-metric.red  { color: #dc2626; }
+  .exec-metric.orange { color: #ea580c; }
+  
+  .delta {
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .delta.up { color: #16a34a; }
+  .delta.down { color: #dc2626; }
+  
+  .sparkline {
+    color: #7c3aed; /* stroke color for sparkline */
+    margin-top: 6px;
+  }
+  

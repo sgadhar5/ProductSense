@@ -1,0 +1,21 @@
+.sources-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .source-card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 14px 16px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+  }
+  .source-top {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 8px;
+  }
+  .icon { font-size: 20px; }
+  .src { font-weight: 700; text-transform: capitalize; }
+  .source-metrics { font-size: 14px; }
+  .muted { color: #6b7280; }
+  

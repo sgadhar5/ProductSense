@@ -1,66 +1,31 @@
 import { useEffect, useState } from "react";
-import RecentTable from "../components/RecentTable";
-import "../styles/dashboard.css";
-import "../styles/layout.css";
-import "../styles/page.css";   // <-- universal centered layout
+import ExecutiveSummary from "../components/ExecutiveSummary";
+import SourceVolumes from "../components/SourceVolumes";
+import TrendingIssues from "../components/TrendingIssues";
+import NegativeStrip from "../components/NegativeStrip";
+import RecentTabs from "../components/RecentTabs";
+import "../styles/dashboard.css";   // ← new hardcoded CSS
 
 export default function Dashboard() {
-  const [grouped, setGrouped] = useState({});
-  const [score, setScore] = useState(null);
-
-  useEffect(() => {
-    fetch("http://localhost:8000/insights/grouped")
-      .then((r) => r.json())
-      .then(setGrouped)
-      .catch(console.error);
-
-    fetch("http://localhost:8000/insights/sentiment_score")
-      .then((r) => r.json())
-      .then(setScore)
-      .catch(console.error);
-  }, []);
-
   return (
-    <div className="page">
-      <div className="page-inner">
+    <div className="dashboard-page-container">
+      <div className="dashboard-box">
 
-        {/* ======================= */}
-        {/* SENTIMENT METRICS ROW */}
-        {/* ======================= */}
-        <div className="metrics-row">
+        <ExecutiveSummary />
+        <SourceVolumes />
+        <NegativeStrip />
 
-          <div className="metric-card">
-            <div className="metric-title">Overall Sentiment</div>
-            <div className="metric-value purple">
-              {score?.overall}
-            </div>
+        <div className="dashboard-two-col">
+          <div className="left-col">
+            <TrendingIssues />
           </div>
-
-          <div className="metric-card">
-            <div className="metric-title">High Severity Reports</div>
-            <div className="metric-value red">
-              {score?.high_severity}
-            </div>
+          <div className="right-col">
+            <RecentTabs />
           </div>
-
-          <div className="metric-card">
-            <div className="metric-title">Outage Mentions</div>
-            <div className="metric-value orange">
-              {score?.outages}
-            </div>
-          </div>
-
-        </div>
-
-        {/* ======================= */}
-        {/* RECENT MENTIONS TABLE */}
-        {/* ======================= */}
-        <div className="recent-container">
-          <h2 className="recent-title">Recent Mentions</h2>
-          <RecentTable grouped={grouped} />
         </div>
 
       </div>
     </div>
   );
 }
+

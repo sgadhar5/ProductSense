@@ -1,17 +1,47 @@
-/* Force every page to have a consistent centered layout */
+/* GLOBAL WRAPPER FOR ALL PAGES */
 .page-container {
-  display: flex !important;
-  justify-content: center !important;
-  align-items: flex-start;
-  padding: 40px 0;
   width: 100%;
-  min-height: calc(100vh - 80px); /* leave space for header */
-  background: #a15cd6;            /* subtle gray */
+  max-width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
 }
 
-/* Inner content wrapper shared by Dashboard, Backlog, Chat */
-.page-inner {
-  width: 1100px;                /* fixed width for all pages */
-  max-width: 95%;
-  margin: 0 auto;
+/* MAIN DASHBOARD BODY (white box) */
+.dashboard-container {
+  width: 100%;
+  max-width: 750px;          /* fits laptop screens cleanly */
+  background: white;
+  padding: 20px;
+  border-radius: 14px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  box-sizing: border-box;
+
+  /* Prevents cards from stretching vertically too much */
+  min-height: calc(100vh - 140px);
+}
+
+/* METRICS ROW */
+.metrics-row {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Metric Cards */
+.metric-card {
+  background: white;
+  border-radius: 10px;
+  padding: 16px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+
+/* RECENT TABLE BOX */
+.recent-container {
+  margin-top: 24px;
+  background: white;
+  padding: 16px;
+  border-radius: 12px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
 }

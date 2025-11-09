@@ -1,34 +1,48 @@
-/* Wrapper that centers cards perfectly */
-.backlog-card-wrapper {
-    display: flex;
-    justify-content: center;
-    margin-top: 30px;
+/* ===================================================== */
+/* BACKLOG PAGE (purple background)                      */
+/* ===================================================== */
+.backlog-page {
     width: 100%;
+    min-height: 100vh;
+    background: #d651dd;         /* <-- PURPLE BG ADDED */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 30px;
   }
   
-  /* Bigger, nicely centered card */
+  /* ============================================================== */
+  /* BACKLOG CARD WRAPPER — stays centered no matter what          */
+  /* ============================================================== */
+  .backlog-card-wrapper {
+    width: 100%;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: flex-start;
+    margin-top: 24px;
+  }
+  
+  /* ============================================================== */
+  /* THE CARD (kept white + centered + increased size)              */
+  /* ============================================================== */
   .clean-card {
-    width: 650px;              /* Increased from 500px → 650px */
-    background: white;
-    padding: 35px;             /* More padding */
+    width: 720px;                 /* Slightly bigger like you asked */
+    max-width: 95vw;
+    background: white;            /* Keep card white on purple BG */
+    padding: 32px;
     border-radius: 18px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.10);
-    transition: transform 0.2s ease;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.1);
+    margin: 0 auto !important;
   }
   
-  /* Slight hover polish (feel free to remove) */
-  .clean-card:hover {
-    transform: translateY(-2px);
-  }
-  
-  /* Row of topic + severity + status badges */
+  /* ============================================================== */
+  /* BADGES                                                         */
+  /* ============================================================== */
   .badge-row {
     display: flex;
     gap: 12px;
     margin-bottom: 16px;
   }
-  
-  /* Badge styling */
   .badge {
     padding: 6px 12px;
     font-size: 0.8rem;
@@ -41,7 +55,9 @@
   .badge.severity { background: #ffae42; }
   .badge.status { background: #6c757d; }
   
-  /* Description toggle */
+  /* ============================================================== */
+  /* DESCRIPTION                                                    */
+  /* ============================================================== */
   .description-box summary {
     cursor: pointer;
     font-weight: 700;
@@ -49,7 +65,9 @@
     font-size: 0.9rem;
   }
   
-  /* Buttons */
+  /* ============================================================== */
+  /* BUTTONS                                                        */
+  /* ============================================================== */
   .notes-btn,
   .resolve-btn {
     margin-top: 14px;
@@ -71,7 +89,9 @@
     color: white;
   }
   
-  /* Pagination arrows & index label */
+  /* ============================================================== */
+  /* ARROWS                                                          */
+  /* ============================================================== */
   .pagination-arrows {
     display: flex;
     justify-content: center;
@@ -81,7 +101,7 @@
   }
   
   .arrow-btn {
-    font-size: 1.8rem;        /* Bigger arrows */
+    font-size: 1.8rem;
     background: none;
     border: none;
     cursor: pointer;
@@ -101,64 +121,5 @@
   .index-text {
     font-size: 1rem;
     color: #555;
-  }
-/* Force the entire backlog page to center content */
-.backlog-page {
-    display: flex;
-    flex-direction: column;
-    align-items: center;       /* horizontally center everything */
-    justify-content: flex-start;
-    width: 100%;
-    padding-top: 20px;
-  }
-  
-  /* Center the card wrapper perfectly */
-  .backlog-card-wrapper {
-    width: 100%;
-    display: flex;
-    justify-content: center;    /* centers horizontally */
-    align-items: center;
-    margin-top: 30px;
-  }
-  
-  /* The backlog card */
-  .clean-card {
-    width: 650px;               /* Nice size */
-    max-width: 90vw;            /* Responsive fallback */
-    background: white;
-    padding: 35px;
-    border-radius: 18px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.10);
-  }
-    /* Page inner constrains width and centers all content */
-.page-inner {
-    width: 1024px;              /* unify page width */
-    max-width: 95vw;
-    margin: 0 auto;             /* center regardless of parent flex */
-  }
-  
-  /* Ensure backlog page doesn’t inherit left-justified flex from higher layers */
-  .page-container.backlog-page {
-    display: block !important;  /* break any inherited flex/grid that misaligns */
-  }
-  
-  /* Center the card wrapper no matter what parent does */
-  .backlog-card-wrapper {
-    width: 100%;
-    display: flex !important;
-    justify-content: center !important;
-    align-items: flex-start;
-    margin-top: 24px;
-  }
-  
-  /* Card sizing and centering */
-  .clean-card {
-    width: 720px;               /* a bit larger per your ask */
-    max-width: 95vw;
-    background: #fff;
-    padding: 32px;
-    border-radius: 18px;
-    box-shadow: 0 6px 18px rgba(0,0,0,0.1);
-    margin: 0 auto !important;  /* hard center as last resort */
   }
   

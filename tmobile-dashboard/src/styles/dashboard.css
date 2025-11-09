@@ -1,187 +1,52 @@
-/* GLOBAL RESET & FONT */
-body, html {
-  margin: 0;
-  padding: 0;
-  font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
-  background: #d651dd;
-  color: #1f2937;
-}
-
-/* LAYOUT */
-.dashboard-container {
-  padding: 24px;
-}
-
-/* TITLE */
-h1 {
-  font-size: 26px;
-  font-weight: 700;
-  color: #1f2937;
-  margin-bottom: 20px;
-}
-
-/* CARDS */
-.metric-card {
-  background: rgb(254, 254, 254);
-  border-radius: 14px;
-  padding: 22px;
-  box-shadow: 0px 2px 8px rgba(0,0,0,0.06);
-  transition: 0.2s ease-in-out;
-}
-
-.metric-card:hover {
-  box-shadow: 0px 4px 14px rgba(0,0,0,0.10);
-}
-
-/* CARD TITLES */
-.metric-title {
-  font-size: 14px;
-  color: #5297f2;
-  margin-bottom: 6px;
-}
-
-.metric-value {
-  font-size: 30px;
-  font-weight: 700;
-}
-
-/* RECENT MENTIONS TABLE WRAPPER */
-.recent-container {
-  background: rgb(255, 255, 255);
-  padding: 24px;
-  border-radius: 14px;
-  box-shadow: 0px 2px 8px rgba(0,0,0,0.06);
-}
-
-.recent-title {
-  font-size: 20px;
-  font-weight: 600;
-  margin-bottom: 16px;
-}
-
-/* TABLES */
-table {
+/* ====================================================== */
+/* DASHBOARD PAGE BACKGROUND (purple full-page)           */
+/* ====================================================== */
+.dashboard-page-container {
   width: 100%;
-  border-collapse: collapse;
-  margin-top: 10px;
-}
-
-thead {
-  background: #f9fafb;
-}
-
-th {
-  text-align: left;
-  padding: 12px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #374151;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-td {
-  padding: 12px;
-  font-size: 14px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-/* TAGS */
-.tag {
-  display: inline-block;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.tag-critical {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.tag-medium {
-  background: #fef3c7;
-  color: #b45309;
-}
-
-.tag-low {
-  background: #d1fae5;
-  color: #047857;
-}
-/* ========================= */
-/* HEADER WRAPPER */
-/* ========================= */
-
-.header {
-  width: 100%;
-  background: white;
-  padding: 20px 32px;
+  min-height: 100vh;              /* full screen height */
+  background: #d651dd;            /* <-- PURPLE BG */
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-
-  /* Subtle shadow */
-  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-  border-bottom: 1px solid #f1f1f1;
+  justify-content: center;        /* center horizontally */
+  align-items: flex-start;        /* align top */
+  padding-top: 40px;              /* top spacing */
+  box-sizing: border-box;
 }
 
-/* ========================= */
-/* LEFT SIDE – LOGO + TITLE */
-/* ========================= */
-.header-left {
+/* ====================================================== */
+/* CENTRAL WHITE DASHBOARD BOX                            */
+/* ====================================================== */
+.dashboard-box {
+  width: 880px;                    /* CONSISTENT WIDTH ACROSS PAGES */
+  max-width: 92vw;                 /* responsive fallback */
+  background: #dfdbdf;
+  padding: 32px;
+  border-radius: 18px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+  box-sizing: border-box;
+  margin-bottom: 60px;             /* space before bottom */
+}
+
+/* ====================================================== */
+/* TWO-COLUMN LAYOUT                                      */
+/* ====================================================== */
+.dashboard-two-col {
   display: flex;
-  align-items: center;
-  gap: 14px;
+  gap: 24px;
+  margin-top: 28px;
 }
 
-.header-logo {
-  width: 42px;
-  height: 42px;
-  background: linear-gradient(135deg, #e20074, #b3005a);
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  color: white;
-  font-size: 20px;
-  font-weight: bold;
+.left-col,
+.right-col {
+  flex: 1;
 }
 
-.header-title {
-  font-size: 22px;
-  font-weight: 600;
-  color: #333;
-}
+/* Stack columns on small screens */
+@media (max-width: 820px) {
+  .dashboard-two-col {
+    flex-direction: column;
+  }
 
-/* ========================= */
-/* RIGHT SIDE – NAV BUTTONS */
-/* ========================= */
-.header-nav {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-}
-
-.nav-btn {
-  padding: 10px 18px;
-  border-radius: 10px;
-  background: #f8f8f8;
-  border: 1px solid #e6e6e6;
-  font-size: 14px;
-  color: #444;
-  cursor: pointer;
-  transition: 0.15s ease-in-out;
-}
-
-.nav-btn:hover {
-  background: #efefef;
-}
-
-/* Highlight the active page */
-.nav-btn.active {
-  background: #e20074;
-  color: white;
-  border-color: #e20074;
-  font-weight: 600;
+  .dashboard-box {
+    width: 95vw;
+  }
 }
