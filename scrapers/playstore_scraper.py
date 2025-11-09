@@ -9,6 +9,11 @@ from google_play_scraper import reviews, Sort
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from openai import OpenAI
 from dotenv import load_dotenv
+import hashlib
+
+def compute_hash(text: str, timestamp: str, source: str):
+    key = f"{source}:{timestamp}:{text}".encode("utf-8")
+    return hashlib.sha256(key).hexdigest()
 
 # ============================================================
 # 0️⃣ Load ENV + OpenAI

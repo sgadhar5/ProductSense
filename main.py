@@ -1,19 +1,27 @@
+############################################################
+#  T-Mobile Customer Happiness Platform — Backend (v4.1)
+#  Full single-file backend with:
+#   - Twitter, Reddit POSTS + COMMENTS, Play Store ingestion (deduped)
+#   - RoBERTa sentiment (CardiffNLP)
+#   - GPT topic + severity + location extraction
+#   - Full Backlog system (CRUD + Kanban + auto-generate)
+#   - Insights API + Chat API
+############################################################
+
 import os
 import json
 import sqlite3
 import datetime
 import asyncio
 from typing import List, Optional, Literal, Dict, Any
-
-# Silence HF tokenizers fork warning (optional)
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+import hashlib
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# ML + API Clients
+# ML
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from openai import OpenAI
@@ -28,12 +36,12 @@ from twikit import Client as TwClient
 from google_play_scraper import reviews, Sort
 
 
-# ============================================================
-# 0) CONFIG
-# ============================================================
+############################################################
+#  CONFIG
+############################################################
 load_dotenv()
 
-app = FastAPI(title="Customer Happiness Ingestion API", version="2.1.0")
+app = FastAPI(title="Customer Happiness API", version="4.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,25 +53,26 @@ app.add_middleware(
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY missing in env")
+    raise RuntimeError("OPENAI_API_KEY missing")
 oaiclient = OpenAI(api_key=OPENAI_API_KEY)
 
+DB_PATH = os.getenv("DB_PATH", "pulseai.db")
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
-REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "tmobile_dashboard_app")
+REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "tmobile_insights")
 
-# Use the exact cookie file + username that work in your standalone test
 TWITTER_COOKIES_PATH = os.getenv("TWITTER_COOKIES_PATH", "cookies_twikit.json")
 TWITTER_WORKING_USERNAME = os.getenv("TWITTER_WORKING_USERNAME", "hackutd2025")
 
-DB_PATH = os.getenv("DB_PATH", "customer_happiness.db")
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-# ============================================================
-# 1) DATABASE + CHECKPOINTS
-# ============================================================
+############################################################
+#  DB + SCHEMA
+############################################################
 def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
+
     conn.execute("""
     CREATE TABLE IF NOT EXISTS insights (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,25 +80,39 @@ def db() -> sqlite3.Connection:
         author TEXT,
         text TEXT,
         timestamp TEXT,
-        url TEXT UNIQUE,
+        url TEXT,
         location TEXT,
         score_raw REAL,
         sentiment_label TEXT,
         sentiment_score REAL,
         topic TEXT,
-        severity TEXT
+        severity TEXT,
+        content_hash TEXT UNIQUE
     );
     """)
-    # Checkpoints:
-    # - twitter: last tweet id (stringified int)
-    # - reddit: last UNIX timestamp (float as string)
-    # - playstore: last UNIX timestamp (float as string)
+
     conn.execute("""
     CREATE TABLE IF NOT EXISTS checkpoints (
         source TEXT PRIMARY KEY,
         last_value TEXT
     );
     """)
+
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS backlog (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        insight_id INTEGER,
+        summary TEXT NOT NULL,
+        description TEXT NOT NULL,
+        topic TEXT,
+        severity TEXT,
+        status TEXT DEFAULT 'todo',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(insight_id)
+    );
+    """)
+
     conn.commit()
     return conn
 
@@ -115,15 +138,10 @@ def set_checkpoint(source: str, value: str):
     conn.close()
 
 
-# ============================================================
-# 2) MODELS (Pydantic)
-# ============================================================
+############################################################
+#  MODELS
+############################################################
 SourceType = Literal["twitter","reddit_post","reddit_comment","playstore"]
-
-class IngestResult(BaseModel):
-    source: SourceType
-    inserted: int
-    details: Optional[Dict[str, Any]] = None
 
 class Insight(BaseModel):
     source: SourceType
@@ -135,48 +153,91 @@ class Insight(BaseModel):
     score_raw: Optional[float]
     sentiment_label: Literal["Negative","Neutral","Positive"]
     sentiment_score: float
-    topic: Literal["billing","5G","outage","pricing","customer_service","devices","trade-ins","autopay","app","general"]
-    severity: Literal["low","medium","high"]
+    topic: str
+    severity: str
 
 
-# ============================================================
-# 3) SENTIMENT (RoBERTa)
-# ============================================================
-print("🔼 Loading RoBERTa sentiment model...")
+
+class BacklogItem(BaseModel):
+    insight_id: Optional[int] = None
+    summary: str
+    description: str
+    topic: str
+    severity: str
+    status: str = "todo"
+    notes: Optional[str] = ""
+
+class BacklogUpdate(BaseModel):
+    summary: Optional[str]
+    description: Optional[str]
+    topic: Optional[str]
+    severity: Optional[str]
+    status: Optional[Literal["todo","doing","done"]]
+    notes: Optional[str]
+
+
+class BacklogUpdate(BaseModel):
+    summary: Optional[str]
+    description: Optional[str]
+    topic: Optional[str]
+    severity: Optional[str]
+    status: Optional[Literal["todo","doing","done"]]
+
+
+############################################################
+#  UTILITIES
+############################################################
+def compute_hash(text: str, timestamp: str, source: str):
+    return hashlib.sha256(f"{source}:{timestamp}:{text}".encode()).hexdigest()
+
+
+############################################################
+#  SENTIMENT MODEL
+############################################################
+print("Loading RoBERTa sentiment model...")
 _tokenizer = AutoTokenizer.from_pretrained("cardiffnlp/twitter-roberta-base-sentiment-latest")
 _model = AutoModelForSequenceClassification.from_pretrained("cardiffnlp/twitter-roberta-base-sentiment-latest")
 _device = "cuda" if torch.cuda.is_available() else "cpu"
 _model.to(_device).eval()
 _LABELS = ["Negative", "Neutral", "Positive"]
 
-
 def analyze_sentiment(text: str):
     text = (text or "").strip()[:1000]
     if not text:
         return "Neutral", 0.0
+
     inputs = _tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
     inputs = {k: v.to(_device) for k, v in inputs.items()}
+
     with torch.no_grad():
         logits = _model(**inputs).logits
         probs = torch.softmax(logits, dim=1)[0].cpu().numpy()
+
     idx = int(probs.argmax())
     return _LABELS[idx], float(probs[idx])
 
 
-# ============================================================
-# 4) GPT TOPIC + SEVERITY
-# ============================================================
+############################################################
+#  GPT Topic + Severity
+############################################################
 TOPIC_ENUM = "billing | 5G | outage | pricing | customer_service | devices | trade-ins | autopay | app | general"
 
-def classify_topic_severity(text: str) -> Dict[str, str]:
+def classify_topic_severity(text: str):
     prompt = f"""
-Return ONLY JSON.
-Classify:
-- "topic": one of [{TOPIC_ENUM}]
-- "severity": "low" | "medium" | "high"
+Return ONLY JSON with:
+{{
+  "topic": one of [{TOPIC_ENUM}],
+  "severity": "low" | "medium" | "high"
+}}
+
+Rules quick:
+- "down/no service/outage/can't connect" → topic: outage or 5G; severity: high
+- billing/payment/autopay failures → billing/autopay; severity: high
+- angry language → bump severity ≥ medium
+- unsure → medium
 
 Text:
-\"\"\"{(text or '')[:1200]}\"\"\"
+\"\"\"{text[:800]}\"\"\"
 """
     try:
         r = oaiclient.responses.create(
@@ -186,21 +247,18 @@ Text:
             max_output_tokens=120
         )
         return json.loads(r.output_text)
-    except Exception:
-        return {"topic": "general", "severity": "low"}
+    except:
+        return {"topic": "general", "severity": "medium"}
 
 
-# ============================================================
-# 5) GPT LOCATION EXTRACTION
-# ============================================================
-def extract_location(text: str) -> Optional[str]:
-    if not text or not text.strip():
-        return None
+############################################################
+#  GPT Location Extraction
+############################################################
+def extract_location(text: str):
     prompt = f"""
 Return ONLY JSON as: {{"location": <string or null>}}
-Extract a geographic location (city/state/region/country) if explicitly mentioned.
+Extract a geographic location if explicitly present.
 
-Message:
 \"\"\"{text[:800]}\"\"\"
 """
     try:
@@ -210,45 +268,173 @@ Message:
             temperature=0,
             max_output_tokens=60
         )
-        data = json.loads(r.output_text)
-        loc = data.get("location")
+        loc = json.loads(r.output_text).get("location")
         return loc if (isinstance(loc, str) and loc.strip()) else None
-    except Exception:
+    except:
         return None
 
 
-# ============================================================
-# 6) TWITTER (DELTA MODE + EXACT WORKING LOGIN)
-# ============================================================
+############################################################
+#  GPT Backlog Summary Generator
+############################################################
+def draft_backlog_fields(insight: Dict[str, Any]):
+    text = insight.get("text", "")
+    topic = insight.get("topic", "general")
+    severity = insight.get("severity", "medium")
+    source = insight.get("source", "")
+    url = insight.get("url", "")
+
+    prompt = f"""
+You MUST return valid JSON only. No commentary. No markdown. No notes.
+
+Return exactly this format:
+{{
+  "summary": "string",
+  "description": "string",
+  "status": "todo"
+}}
+
+Strong rules:
+- SUMMARY must be a clear human action item.
+- NEVER use generic summaries like "issue related to app".
+- DESCRIPTION must be bullet points describing problem, impact, source.
+- Do NOT include markdown.
+- Do NOT wrap in code fences.
+
+User text:
+{text[:800]}
+
+Topic: {topic}
+Severity: {severity}
+Source: {source}
+URL: {url}
+
+Respond ONLY with JSON.
+"""
+
+    try:
+        r = oaiclient.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt,
+            temperature=0,
+            max_output_tokens=200
+        )
+
+        output = r.output_text.strip()
+
+        # Remove accidental code fencing
+        if output.startswith("```"):
+            output = output.strip("```").replace("json", "").strip()
+
+        data = json.loads(output)
+
+        return {
+            "summary": data.get("summary", f"{topic.title()} issue")[:120],
+            "description": data.get("description", "- user report"),
+            "status": data.get("status", "todo")
+        }
+
+    except Exception as e:
+        print("draft_backlog_fields() fallback due to error:", e)
+        return {
+            "summary": f"{topic.title()} issue"[:120],
+            "description": f"- Severity: {severity}\n- Source: {source}\n- URL: {url}",
+            "status": "todo"
+        }
+
+@app.post("/backlog/regenerate_clean")
+def backlog_regenerate_clean():
+    """
+    Deletes ALL backlog items and regenerates them using the improved
+    GPT-backed summary generator + classification logic.
+    """
+    conn = db()
+    cur = conn.cursor()
+
+    # 1. Delete all backlog items
+    cur.execute("DELETE FROM backlog")
+    conn.commit()
+
+    print("🧹 Cleared backlog table")
+
+    # 2. Re-run auto-generation
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+
+    resp = client.post("/backlog/auto_from_insights")
+    conn.close()
+
+    print("⚡️ Regenerated backlog:", resp.json())
+    return {
+        "status": "ok",
+        "message": "Backlog cleared and regenerated.",
+        "details": resp.json()
+    }
+
+@app.get("/insights/sentiment_score")
+def insights_sentiment_score():
+    conn = db()
+    cur = conn.cursor()
+
+    # Count by sentiment
+    cur.execute("""
+        SELECT sentiment_label, COUNT(*)
+        FROM insights
+        GROUP BY sentiment_label
+    """)
+    sentiment_counts = {row[0]: row[1] for row in cur.fetchall()}
+
+    # Count high-severity issues
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM insights
+        WHERE severity='high'
+    """)
+    high_severity = cur.fetchone()[0]
+
+    # Count outages
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM insights
+        WHERE topic='outage'
+           OR topic='5G'
+    """)
+    outages = cur.fetchone()[0]
+
+    conn.close()
+
+    total = sum(sentiment_counts.values()) or 1
+    overall_score = (
+        (sentiment_counts.get("Positive", 0) - sentiment_counts.get("Negative", 0))
+        / total
+    )
+
+    return {
+        "overall": round(overall_score, 3),
+        "high_severity": high_severity,
+        "outages": outages
+    }
+
+############################################################
+#  TWITTER INGEST
+############################################################
 async def twitter_client() -> TwClient:
     client = TwClient("en-US")
-    try:
-        client.load_cookies(TWITTER_COOKIES_PATH)
-        print(f"✅ Loaded Twitter cookies from {TWITTER_COOKIES_PATH}")
-    except Exception as e:
-        raise RuntimeError(f"Failed to load Twikit cookies: {e}")
-
-    try:
-        me = await client.get_user_by_screen_name(TWITTER_WORKING_USERNAME)
-        print(f"🔐 Logged in as {me.screen_name}")
-    except Exception as e:
-        raise RuntimeError(f"Invalid Twikit cookies/session: {e}")
-
+    client.load_cookies(TWITTER_COOKIES_PATH)
+    await client.get_user_by_screen_name(TWITTER_WORKING_USERNAME)
     return client
 
 
-async def ingest_twitter(max_pages=5) -> IngestResult:
+async def ingest_twitter(max_pages=3):
     client = await twitter_client()
 
-    query = '("T-Mobile") -arena -center -concert -tickets'
-    last_seen_id_raw = get_checkpoint("twitter")
-    last_seen_id = int(last_seen_id_raw) if (last_seen_id_raw and last_seen_id_raw.isdigit()) else 0
-    print(f"📌 Twitter checkpoint (last tweet id): {last_seen_id}")
+    last_id = int(get_checkpoint("twitter") or 0)
 
-    tweets = await client.search_tweet(query, "Latest")
+    q = '("T-Mobile") OR "TMobile" OR "T Mobile" -arena -concert -tickets'
+    tweets = await client.search_tweet(q, "Latest")
+
     all_tweets = list(tweets)
     page = 1
-
     while page < max_pages:
         try:
             nxt = await tweets.next()
@@ -256,92 +442,81 @@ async def ingest_twitter(max_pages=5) -> IngestResult:
                 break
             all_tweets.extend(nxt)
             page += 1
-        except Exception:
+        except:
             break
 
-    # Delta: only newer than last_seen_id
-    new_tweets = []
-    max_id = last_seen_id
+    new_rows = []
+    max_seen = last_id
+
     for t in all_tweets:
-        try:
-            tid = int(getattr(t, "id"))
-        except Exception:
+        tid = int(getattr(t, "id", 0) or 0)
+        if tid <= last_id:
             continue
-        if tid <= last_seen_id:
-            continue
-        new_tweets.append(t)
-        if tid > max_id:
-            max_id = tid
 
-    if not new_tweets:
-        return IngestResult(source="twitter", inserted=0)
-
-    rows: List[Insight] = []
-    for t in new_tweets:
         text = (t.text or "").strip()
         if not text:
             continue
 
-        sentiment, score = analyze_sentiment(text)
+        sentiment, s_score = analyze_sentiment(text)
         meta = classify_topic_severity(text)
 
-        # created_at can be datetime or string; normalize to ISO
         ts = getattr(t, "created_at", None)
-        if ts is None:
-            ts_iso = datetime.datetime.utcnow().isoformat()
+        if isinstance(ts, datetime.datetime):
+            ts_iso = ts.isoformat()
         elif isinstance(ts, str):
             ts_iso = ts
         else:
-            # assume datetime-like
-            try:
-                ts_iso = ts.isoformat()
-            except Exception:
-                ts_iso = datetime.datetime.utcnow().isoformat()
+            ts_iso = datetime.datetime.utcnow().isoformat()
 
-        url = f"https://x.com/{t.user.screen_name}/status/{t.id}"
-        score_raw = float(getattr(t, "favorite_count", 0) or 0) + float(getattr(t, "retweet_count", 0) or 0)
+        new_rows.append({
+            "source": "twitter",
+            "author": getattr(getattr(t, "user", None), "name", None),
+            "text": text,
+            "timestamp": ts_iso,
+            "url": f"https://x.com/{getattr(getattr(t, 'user', None), 'screen_name', 'user')}/status/{tid}",
+            "location": extract_location(text),
+            "score_raw": float(getattr(t, "favorite_count", 0) or 0) + float(getattr(t, "retweet_count", 0) or 0),
+            "sentiment_label": sentiment,
+            "sentiment_score": s_score,
+            "topic": meta["topic"],
+            "severity": meta["severity"]
+        })
 
-        rows.append(Insight(
-            source="twitter",
-            author=getattr(t.user, "name", None),
-            text=text[:2000],
-            timestamp=ts_iso,
-            url=url,
-            location=extract_location(text),
-            score_raw=score_raw,
-            sentiment_label=sentiment,
-            sentiment_score=score,
-            topic=meta["topic"],
-            severity=meta["severity"]
-        ))
+        max_seen = max(max_seen, tid)
 
+    # Insert
     conn = db()
     cur = conn.cursor()
-    for r in rows:
+    inserted = 0
+
+    for r in new_rows:
+        h = compute_hash(r["text"], r["timestamp"], r["source"])
         cur.execute("""
-            INSERT OR IGNORE INTO insights (
-                source, author, text, timestamp, url, location,
-                score_raw, sentiment_label, sentiment_score, topic, severity
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO insights
+            (source, author, text, timestamp, url, location, score_raw,
+             sentiment_label, sentiment_score, topic, severity, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            r.source, r.author, r.text, r.timestamp, r.url, r.location,
-            r.score_raw, r.sentiment_label, r.sentiment_score, r.topic, r.severity
+            r["source"], r["author"], r["text"], r["timestamp"], r["url"],
+            r["location"], r["score_raw"], r["sentiment_label"],
+            r["sentiment_score"], r["topic"], r["severity"], h
         ))
+        if cur.rowcount > 0:
+            inserted += 1
+
     conn.commit()
     conn.close()
 
-    if max_id > last_seen_id:
-        set_checkpoint("twitter", str(max_id))
+    if max_seen > last_id:
+        set_checkpoint("twitter", str(max_seen))
 
-    return IngestResult(source="twitter", inserted=len(rows))
+    return {"source": "twitter", "inserted": inserted}
 
 
-# ============================================================
-# 7) REDDIT (DELTA MODE)
-# ============================================================
+############################################################
+#  REDDIT INGEST — POSTS
+############################################################
 def reddit_client():
-    if not (REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET):
-        raise RuntimeError("Reddit credentials missing in env")
     return praw.Reddit(
         client_id=REDDIT_CLIENT_ID,
         client_secret=REDDIT_CLIENT_SECRET,
@@ -349,20 +524,20 @@ def reddit_client():
     )
 
 
-def ingest_reddit(limit_search=50, limit_comments=200) -> IngestResult:
+def ingest_reddit_posts(limit_search=60):
     reddit = reddit_client()
-    rows: List[Insight] = []
 
-    last_ts_raw = get_checkpoint("reddit")
-    last_ts = float(last_ts_raw) if last_ts_raw else 0.0
-    newest_ts = last_ts
+    last_ts = float(get_checkpoint("reddit_post") or 0.0)
+    newest = last_ts
 
-    # Site-wide posts mentioning T-Mobile
-    for sub in reddit.subreddit("all").search("T-Mobile OR TMobile", limit=limit_search):
-        created = float(getattr(sub, "created_utc", 0) or 0)
+    query = 'T-Mobile OR "T Mobile" OR TMobile OR tmobile'
+    rows = []
+
+    for sub in reddit.subreddit("all").search(query, sort="new", limit=limit_search):
+        created = float(getattr(sub, "created_utc", 0.0))
         if created <= last_ts:
             continue
-        newest_ts = max(newest_ts, created)
+        newest = max(newest, created)
 
         title = sub.title or ""
         body = sub.selftext or ""
@@ -372,75 +547,148 @@ def ingest_reddit(limit_search=50, limit_comments=200) -> IngestResult:
 
         sentiment, score = analyze_sentiment(text)
         meta = classify_topic_severity(text)
+        ts_iso = datetime.datetime.utcfromtimestamp(created).isoformat()
 
-        rows.append(Insight(
-            source="reddit_post",
-            author=str(sub.author) if sub.author else None,
-            text=text[:2000],
-            timestamp=datetime.datetime.utcfromtimestamp(created).isoformat(),
-            url=sub.url,  # unique
-            location=extract_location(text),
-            score_raw=float(getattr(sub, "score", 0) or 0),
-            sentiment_label=sentiment,
-            sentiment_score=score,
-            topic=meta["topic"],
-            severity=meta["severity"]
-        ))
+        rows.append({
+            "source": "reddit_post",
+            "author": str(sub.author) if sub.author else None,
+            "text": text,
+            "timestamp": ts_iso,
+            "url": f"https://www.reddit.com{sub.permalink}" if getattr(sub, "permalink", None) else sub.url,
+            "location": extract_location(text),
+            "score_raw": float(getattr(sub, "score", 0) or 0),
+            "sentiment_label": sentiment,
+            "sentiment_score": score,
+            "topic": meta["topic"],
+            "severity": meta["severity"]
+        })
 
-    # Latest comments in r/TMobile
-    for c in reddit.subreddit("TMobile").comments(limit=limit_comments):
-        created = float(getattr(c, "created_utc", 0) or 0)
-        if created <= last_ts:
-            continue
-        newest_ts = max(newest_ts, created)
-
-        text = (c.body or "").strip()
-        if not text:
-            continue
-
-        sentiment, score = analyze_sentiment(text)
-        meta = classify_topic_severity(text)
-
-        rows.append(Insight(
-            source="reddit_comment",
-            author=str(c.author) if c.author else None,
-            text=text[:2000],
-            timestamp=datetime.datetime.utcfromtimestamp(created).isoformat(),
-            url=f"https://reddit.com{c.permalink}",  # unique
-            location=extract_location(text),
-            score_raw=float(getattr(c, "score", 0) or 0),
-            sentiment_label=sentiment,
-            sentiment_score=score,
-            topic=meta["topic"],
-            severity=meta["severity"]
-        ))
-
-    # Store rows (INSERT OR IGNORE by unique url)
+    # Insert
     conn = db()
     cur = conn.cursor()
+    inserted = 0
+
     for r in rows:
+        h = compute_hash(r["text"], r["timestamp"], r["source"])
         cur.execute("""
-            INSERT OR IGNORE INTO insights (
-                source, author, text, timestamp, url, location,
-                score_raw, sentiment_label, sentiment_score, topic, severity
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO insights
+            (source, author, text, timestamp, url, location, score_raw,
+             sentiment_label, sentiment_score, topic, severity, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            r.source, r.author, r.text, r.timestamp, r.url, r.location,
-            r.score_raw, r.sentiment_label, r.sentiment_score, r.topic, r.severity
+            r["source"], r["author"], r["text"], r["timestamp"], r["url"],
+            r["location"], r["score_raw"], r["sentiment_label"],
+            r["sentiment_score"], r["topic"], r["severity"], h
         ))
+        if cur.rowcount > 0:
+            inserted += 1
+
     conn.commit()
     conn.close()
 
-    if newest_ts > last_ts:
-        set_checkpoint("reddit", str(newest_ts))
+    if newest > last_ts:
+        set_checkpoint("reddit_post", str(newest))
 
-    return IngestResult(source="reddit_post", inserted=len(rows))
+    return {"source": "reddit_post", "inserted": inserted}
 
 
-# ============================================================
-# 8) PLAY STORE (DELTA MODE)
-# ============================================================
-def ingest_playstore(count=200) -> IngestResult:
+############################################################
+#  REDDIT INGEST — COMMENTS (from matched posts)
+############################################################
+def ingest_reddit_comments(limit_posts=40, max_comments_per_post=60):
+    reddit = reddit_client()
+
+    last_c_ts = float(get_checkpoint("reddit_comment") or 0.0)
+    newest_c = last_c_ts
+
+    query = 'T-Mobile OR "T Mobile" OR TMobile OR tmobile'
+    # Get recent matching posts, then scrape their comments
+    posts = list(reddit.subreddit("all").search(query, sort="new", limit=limit_posts))
+
+    rows = []
+
+    for post in posts:
+        try:
+            post.comments.replace_more(limit=0)
+            comments = post.comments.list()
+        except Exception:
+            continue
+
+        count = 0
+        for c in comments:
+            # Stop per-post cap
+            if count >= max_comments_per_post:
+                break
+            try:
+                c_created = float(getattr(c, "created_utc", 0.0))
+            except Exception:
+                continue
+            if c_created <= last_c_ts:
+                continue
+            newest_c = max(newest_c, c_created)
+
+            text = (getattr(c, "body", "") or "").strip()
+            if not text:
+                continue
+
+            # MUST mention T-Mobile-ish content to keep relevance (cheap filter)
+            # You can relax this if desired
+            low = text.lower()
+            if not any(k in low for k in ["t-mobile", "tmobile", "t mobile", "magenta", "5g", "outage", "t life", "billing"]):
+                continue
+
+            sentiment, s = analyze_sentiment(text)
+            meta = classify_topic_severity(text)
+            ts_iso = datetime.datetime.utcfromtimestamp(c_created).isoformat()
+            url = f"https://www.reddit.com{getattr(c, 'permalink', '')}"
+
+            rows.append({
+                "source": "reddit_comment",
+                "author": str(getattr(c, "author", None)) if getattr(c, "author", None) else None,
+                "text": text,
+                "timestamp": ts_iso,
+                "url": url,
+                "location": extract_location(text),
+                "score_raw": float(getattr(c, "score", 0) or 0),
+                "sentiment_label": sentiment,
+                "sentiment_score": s,
+                "topic": meta["topic"],
+                "severity": meta["severity"]
+            })
+            count += 1
+
+    # Insert
+    conn = db()
+    cur = conn.cursor()
+    inserted = 0
+    for r in rows:
+        h = compute_hash(r["text"], r["timestamp"], r["source"])
+        cur.execute("""
+            INSERT OR IGNORE INTO insights
+            (source, author, text, timestamp, url, location, score_raw,
+             sentiment_label, sentiment_score, topic, severity, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            r["source"], r["author"], r["text"], r["timestamp"], r["url"],
+            r["location"], r["score_raw"], r["sentiment_label"],
+            r["sentiment_score"], r["topic"], r["severity"], h
+        ))
+        if cur.rowcount > 0:
+            inserted += 1
+
+    conn.commit()
+    conn.close()
+
+    if newest_c > last_c_ts:
+        set_checkpoint("reddit_comment", str(newest_c))
+
+    return {"source": "reddit_comment", "inserted": inserted}
+
+
+############################################################
+#  PLAY STORE INGEST
+############################################################
+def ingest_playstore(count=150):
     raw, _ = reviews(
         "com.tmobile.pr.mytmobile",
         lang="en",
@@ -449,105 +697,239 @@ def ingest_playstore(count=200) -> IngestResult:
         count=count
     )
 
-    last_ts_raw = get_checkpoint("playstore")
-    last_ts = float(last_ts_raw) if last_ts_raw else 0.0
+    last_ts = float(get_checkpoint("playstore") or 0.0)
     newest = last_ts
-    rows: List[Insight] = []
+
+    rows = []
 
     for r in raw:
         dt = r.get("at")
         if not dt:
             continue
+
         ts = float(dt.timestamp())
         if ts <= last_ts:
             continue
         newest = max(newest, ts)
 
-        text = (r.get("content") or "").strip()
+        text = r.get("content", "")
         if not text:
             continue
 
-        sentiment, score = analyze_sentiment(text)
+        sentiment, s_score = analyze_sentiment(text)
         meta = classify_topic_severity(text)
 
-        rows.append(Insight(
-            source="playstore",
-            author=r.get("userName") or None,
-            text=text[:2000],
-            timestamp=dt.isoformat(),
-            url="https://play.google.com/store/apps/details?id=com.tmobile.pr.mytmobile",  # constant but INSERT OR IGNORE ensures 1 per timestamp combo
-            location=extract_location(text),
-            score_raw=float(r.get("score") or 0),
-            sentiment_label=sentiment,
-            sentiment_score=score,
-            topic=meta["topic"],
-            severity=meta["severity"]
-        ))
+        rows.append({
+            "source": "playstore",
+            "author": r.get("userName"),
+            "text": text,
+            "timestamp": dt.isoformat(),
+            "url": "https://play.google.com/store/apps/details?id=com.tmobile.pr.mytmobile",
+            "location": extract_location(text),
+            "score_raw": float(r.get("score") or 0),
+            "sentiment_label": sentiment,
+            "sentiment_score": s_score,
+            "topic": meta["topic"],
+            "severity": meta["severity"]
+        })
 
     conn = db()
     cur = conn.cursor()
+    inserted = 0
+
     for r in rows:
-        # Use (url + timestamp + author + text prefix) uniqueness indirectly via IGNORE on url;
-        # If you want stricter dedupe for Play Store, consider adding a hash column.
+        h = compute_hash(r["text"], r["timestamp"], r["source"])
         cur.execute("""
-            INSERT OR IGNORE INTO insights (
-                source, author, text, timestamp, url, location,
-                score_raw, sentiment_label, sentiment_score, topic, severity
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO insights
+            (source, author, text, timestamp, url, location, score_raw,
+             sentiment_label, sentiment_score, topic, severity, content_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            r.source, r.author, r.text, r.timestamp, r.url, r.location,
-            r.score_raw, r.sentiment_label, r.sentiment_score, r.topic, r.severity
+            r["source"], r["author"], r["text"], r["timestamp"], r["url"],
+            r["location"], r["score_raw"], r["sentiment_label"],
+            r["sentiment_score"], r["topic"], r["severity"], h
         ))
+        if cur.rowcount > 0:
+            inserted += 1
+
     conn.commit()
     conn.close()
 
     if newest > last_ts:
         set_checkpoint("playstore", str(newest))
 
-    return IngestResult(source="playstore", inserted=len(rows))
+    return {"source": "playstore", "inserted": inserted}
 
 
-# ============================================================
-# 9) ROUTES
-# ============================================================
-@app.get("/health")
-def health():
-    return {"ok": True, "db": os.path.abspath(DB_PATH)}
+############################################################
+#  BACKLOG ENDPOINTS (CRUD + AUTO)
+############################################################
+@app.get("/backlog")
+def backlog_list():
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, insight_id, summary, description, topic, severity, status,
+               created_at, updated_at
+        FROM backlog
+        ORDER BY created_at DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
 
-@app.post("/ingest/twitter")
-async def api_ingest_twitter(max_pages: int = 5):
-    try:
-        return await ingest_twitter(max_pages=max_pages)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return [
+        {
+            "id": r[0],
+            "insight_id": r[1],
+            "summary": r[2],
+            "description": r[3],
+            "topic": r[4],
+            "severity": r[5],
+            "status": r[6],
+            "created_at": r[7],
+            "updated_at": r[8],
+        }
+        for r in rows
+    ]
 
-@app.post("/ingest/reddit")
-def api_ingest_reddit(limit_search: int = 50, limit_comments: int = 200):
-    try:
-        return ingest_reddit(limit_search=limit_search, limit_comments=limit_comments)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/ingest/playstore")
-def api_ingest_playstore(count: int = 200):
-    try:
-        return ingest_playstore(count=count)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/backlog/kanban")
+def backlog_kanban():
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, insight_id, summary, topic, severity, status
+        FROM backlog
+        ORDER BY created_at DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
 
-@app.post("/ingest/all")
-async def api_ingest_all():
-    try:
-        t_task = asyncio.create_task(ingest_twitter())
-        loop = asyncio.get_event_loop()
-        r_res = await loop.run_in_executor(None, ingest_reddit, 50, 200)
-        p_res = await loop.run_in_executor(None, ingest_playstore, 200)
-        t_res = await t_task
-        return {"ingested": [r_res.model_dump(), p_res.model_dump(), t_res.model_dump()]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    board = {"todo": [], "doing": [], "done": []}
+    for r in rows:
+        item = {"id": r[0], "insight_id": r[1], "summary": r[2],
+                "topic": r[3], "severity": r[4]}
+        board[r[5]].append(item)
+    return board
 
-@app.get("/insights/recent", response_model=List[Insight])
+
+@app.post("/backlog")
+def backlog_create(item: BacklogItem):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO backlog (insight_id, summary, description, topic, severity, status, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        item.insight_id,
+        item.summary,
+        item.description,
+        item.topic,
+        item.severity,
+        item.status,
+        item.notes,
+    ))
+    conn.commit()
+
+    return {"created": True}
+
+
+@app.patch("/backlog/{item_id}")
+def backlog_update(item_id: int, data: dict):
+    conn = sqlite3.connect("db.sqlite")
+    cur = conn.cursor()
+
+    fields = []
+    values = []
+
+    if "status" in data:
+        fields.append("status = ?")
+        values.append(data["status"])
+
+    if "notes" in data:
+        fields.append("notes = ?")
+        values.append(data["notes"])
+
+    # Require at least one field
+    if not fields:
+        return {"error": "No valid fields to update"}
+
+    values.append(item_id)
+
+    cur.execute(
+        f"UPDATE backlog SET {', '.join(fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        values
+    )
+
+    conn.commit()
+    conn.close()
+
+    return {"success": True}
+
+@app.delete("/backlog/{item_id}")
+def backlog_delete(item_id: int):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM backlog WHERE id=?", (item_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/backlog/auto_from_insights")
+def backlog_auto():
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT i.id, i.text, i.topic, i.severity, i.sentiment_label,
+               i.timestamp, i.url, i.source
+        FROM insights i
+        LEFT JOIN backlog b ON b.insight_id = i.id
+        WHERE b.id IS NULL
+          AND (i.severity='high' OR i.topic='outage'
+               OR (i.sentiment_label='Negative' AND i.topic IN ('billing','app')))
+        ORDER BY i.timestamp DESC
+        LIMIT 300
+    """)
+    rows = cur.fetchall()
+
+    created = []
+
+    for row in rows:
+        iid, text, topic, severity, sentiment, ts, url, source = row
+
+        drafted = draft_backlog_fields({
+            "text": text,
+            "topic": topic,
+            "severity": severity,
+            "sentiment_label": sentiment,
+            "url": url,
+            "timestamp": ts,
+            "source": source,
+        })
+
+        try:
+            cur.execute("""
+                INSERT INTO backlog (insight_id, summary, description, topic, severity, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (iid, drafted["summary"], drafted["description"],
+                  topic, severity, drafted["status"]))
+            created.append(iid)
+        except sqlite3.IntegrityError:
+            pass
+
+    conn.commit()
+    conn.close()
+
+    return {"created": len(created), "insights": created}
+
+
+############################################################
+#  INSIGHTS ENDPOINTS
+############################################################
+@app.get("/insights/recent")
 def api_recent(limit: int = 50):
     conn = db()
     cur = conn.cursor()
@@ -555,83 +937,228 @@ def api_recent(limit: int = 50):
         SELECT source, author, text, timestamp, url, location, score_raw,
                sentiment_label, sentiment_score, topic, severity
         FROM insights
-        ORDER BY id DESC
+        ORDER BY timestamp DESC
         LIMIT ?
     """, (limit,))
     rows = cur.fetchall()
     conn.close()
-    return [Insight(
-        source=row[0], author=row[1], text=row[2], timestamp=row[3],
-        url=row[4], location=row[5], score_raw=row[6],
-        sentiment_label=row[7], sentiment_score=row[8],
-        topic=row[9], severity=row[10]
-    ) for row in rows]
 
-@app.get("/insights/summary")
-def api_summary():
+    return [
+        {
+            "source": r[0], "author": r[1], "text": r[2],
+            "timestamp": r[3], "url": r[4], "location": r[5],
+            "score_raw": r[6], "sentiment_label": r[7],
+            "sentiment_score": r[8], "topic": r[9], "severity": r[10]
+        }
+        for r in rows
+    ]
+
+
+@app.get("/insights/grouped")
+def api_grouped(limit: int = 50):
     conn = db()
     cur = conn.cursor()
-    cur.execute("SELECT sentiment_label, COUNT(*) FROM insights GROUP BY sentiment_label")
-    sents = dict(cur.fetchall())
-    cur.execute("SELECT topic, COUNT(*) FROM insights GROUP BY topic")
-    topics = dict(cur.fetchall())
-    cur.execute("SELECT severity, COUNT(*) FROM insights GROUP BY severity")
-    sevs = dict(cur.fetchall())
-    conn.close()
-    return {
-        "sentiment_counts": sents,
-        "topic_counts": topics,
-        "severity_counts": sevs
-    }
 
+    data = {}
+    for src in ["twitter", "reddit_post", "reddit_comment", "playstore"]:
+        cur.execute("""
+            SELECT source, author, text, timestamp, url, location, score_raw,
+                   sentiment_label, sentiment_score, topic, severity
+            FROM insights
+            WHERE source=?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (src, limit))
+        rows = cur.fetchall()
+
+        data[src] = [
+            {
+                "source": r[0], "author": r[1], "text": r[2],
+                "timestamp": r[3], "url": r[4], "location": r[5],
+                "score_raw": r[6], "sentiment_label": r[7],
+                "sentiment_score": r[8], "topic": r[9], "severity": r[10]
+            }
+            for r in rows
+        ]
+
+    conn.close()
+    return data
+
+
+############################################################
+#  CHAT ENDPOINT
+############################################################
 @app.post("/chat")
 def chat(question: dict):
     q = (question or {}).get("question", "").strip()
     if not q:
         return {"answer": "Please ask a question."}
 
-    # Pull recent insights for context
     conn = db()
     cur = conn.cursor()
     cur.execute("""
         SELECT source, sentiment_label, topic, severity, text, timestamp
         FROM insights
-        ORDER BY id DESC
-        LIMIT 200
+        ORDER BY timestamp DESC
+        LIMIT 300
     """)
     rows = cur.fetchall()
     conn.close()
 
-    # Build compact context to keep tokens low
-    lines = []
-    for src, sent, top, sev, txt, ts in rows:
-        snippet = (txt or "").replace("\n", " ").strip()
+    context = ""
+    for src, s, t, sev, txt, ts in rows:
+        snippet = (txt or "").replace("\n"," ")
         if len(snippet) > 240:
             snippet = snippet[:240] + "…"
-        lines.append(f"[{src} | {ts} | {sent} | {top} | {sev}] {snippet}")
-    context = "\n".join(lines[:180])
+        context += f"[{src} | {ts} | {s} | {t} | {sev}] {snippet}\n"
 
     prompt = f"""
-You are a T-Mobile Customer Insights Analyst AI.
+Use ONLY the insights below to answer the question.
 
-Use ONLY the insights below to answer the user's question. Be concise, cite patterns, and avoid speculation.
-
-### INSIGHTS ###
+INSIGHTS:
 {context}
 
-### QUESTION ###
+QUESTION:
 {q}
 
-Provide a clear, structured answer (bullets or short paragraphs). If relevant, include rough counts (e.g., "about 10 mentions") inferred from the context provided.
+Return a factual, structured answer.
 """
 
-    try:
-        resp = oaiclient.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt,
-            temperature=0.2,
-            max_output_tokens=300,
-        )
-        return {"answer": resp.output_text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    resp = oaiclient.responses.create(
+        model="gpt-4.1-mini",
+        input=prompt,
+        temperature=0.2,
+        max_output_tokens=320,
+    )
+    return {"answer": resp.output_text}
+
+
+############################################################
+#  INGEST ENDPOINTS
+############################################################
+@app.post("/ingest/twitter")
+async def api_ingest_twitter(max_pages: int = 3):
+    return await ingest_twitter(max_pages=max_pages)
+
+@app.post("/ingest/reddit_posts")
+def api_ingest_reddit_posts(limit_search: int = 60):
+    return ingest_reddit_posts(limit_search=limit_search)
+
+@app.post("/ingest/reddit_comments")
+def api_ingest_reddit_comments(limit_posts: int = 40, max_comments_per_post: int = 60):
+    return ingest_reddit_comments(limit_posts=limit_posts, max_comments_per_post=max_comments_per_post)
+
+@app.post("/ingest/playstore")
+def api_ingest_playstore(count: int = 150):
+    return ingest_playstore(count=count)
+
+@app.post("/ingest/all")
+async def api_ingest_all():
+    t_task = asyncio.create_task(ingest_twitter())
+    rp = ingest_reddit_posts()
+    rc = ingest_reddit_comments()
+    ps = ingest_playstore()
+    tw = await t_task
+
+    # Auto-create backlog items for severe/outage/billing/app-negatives
+    auto = backlog_auto()
+
+    return {
+        "twitter": tw,
+        "reddit_posts": rp,
+        "reddit_comments": rc,
+        "playstore": ps,
+        "backlog_auto_created": auto
+    }
+
+@app.get("/analytics/summary")
+def analytics_summary():
+    conn = db()
+    cur = conn.cursor()
+
+    # Get 300 latest items for sentiment scoring
+    cur.execute("""
+        SELECT sentiment_label, severity
+        FROM insights
+        ORDER BY timestamp DESC
+        LIMIT 300
+    """)
+    rows = cur.fetchall()
+
+    conn.close()
+
+    score = 0
+    max_score = 0
+
+    for sent, sev in rows:
+        # Sentiment weight
+        if sent == "Positive":
+            s = 1
+        elif sent == "Negative":
+            s = -1
+        else:
+            s = 0
+
+        # Severity weight
+        if sev == "high":
+            s -= 2
+        elif sev == "medium":
+            s -= 1
+
+        score += s
+        max_score += 3  # theoretical max per record
+
+    if max_score == 0:
+        final_score = 0
+    else:
+        final_score = int((score / max_score) * 100)
+
+    return {
+        "sentiment_score": final_score
+    }
+
+@app.get("/backlog/summary")
+def backlog_summary():
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) FROM backlog WHERE status='todo'")
+    todo = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM backlog WHERE status='doing'")
+    doing = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM backlog WHERE status='done'")
+    done = cur.fetchone()[0]
+
+    cur.execute("""
+        SELECT id, summary, topic, severity, status, created_at
+        FROM backlog
+        ORDER BY created_at DESC
+        LIMIT 5
+    """)
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return {
+        "counts": {"todo": todo, "doing": doing, "done": done},
+        "latest": [
+            {
+                "id": r[0],
+                "summary": r[1],
+                "topic": r[2],
+                "severity": r[3],
+                "status": r[4],
+                "created_at": r[5]
+            }
+            for r in rows
+        ]
+    }
+
+############################################################
+#  HEALTH
+############################################################
+@app.get("/health")
+def health():
+    return {"ok": True, "db": DB_PATH}

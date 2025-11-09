@@ -1,0 +1,164 @@
+/* Wrapper that centers cards perfectly */
+.backlog-card-wrapper {
+    display: flex;
+    justify-content: center;
+    margin-top: 30px;
+    width: 100%;
+  }
+  
+  /* Bigger, nicely centered card */
+  .clean-card {
+    width: 650px;              /* Increased from 500px → 650px */
+    background: white;
+    padding: 35px;             /* More padding */
+    border-radius: 18px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.10);
+    transition: transform 0.2s ease;
+  }
+  
+  /* Slight hover polish (feel free to remove) */
+  .clean-card:hover {
+    transform: translateY(-2px);
+  }
+  
+  /* Row of topic + severity + status badges */
+  .badge-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  
+  /* Badge styling */
+  .badge {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    border-radius: 12px;
+    color: white;
+    font-weight: 600;
+  }
+  
+  .badge.topic { background: #6f42c1; }
+  .badge.severity { background: #ffae42; }
+  .badge.status { background: #6c757d; }
+  
+  /* Description toggle */
+  .description-box summary {
+    cursor: pointer;
+    font-weight: 700;
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+  }
+  
+  /* Buttons */
+  .notes-btn,
+  .resolve-btn {
+    margin-top: 14px;
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  
+  .notes-btn {
+    background: #f4f4f4;
+  }
+  
+  .resolve-btn {
+    background: #1bbf72;
+    color: white;
+  }
+  
+  /* Pagination arrows & index label */
+  .pagination-arrows {
+    display: flex;
+    justify-content: center;
+    gap: 25px;
+    margin-top: 20px;
+    align-items: center;
+  }
+  
+  .arrow-btn {
+    font-size: 1.8rem;        /* Bigger arrows */
+    background: none;
+    border: none;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+  }
+  
+  .arrow-btn:hover {
+    opacity: 1;
+  }
+  
+  .arrow-btn:disabled {
+    opacity: 0.2;
+    cursor: default;
+  }
+  
+  .index-text {
+    font-size: 1rem;
+    color: #555;
+  }
+/* Force the entire backlog page to center content */
+.backlog-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;       /* horizontally center everything */
+    justify-content: flex-start;
+    width: 100%;
+    padding-top: 20px;
+  }
+  
+  /* Center the card wrapper perfectly */
+  .backlog-card-wrapper {
+    width: 100%;
+    display: flex;
+    justify-content: center;    /* centers horizontally */
+    align-items: center;
+    margin-top: 30px;
+  }
+  
+  /* The backlog card */
+  .clean-card {
+    width: 650px;               /* Nice size */
+    max-width: 90vw;            /* Responsive fallback */
+    background: white;
+    padding: 35px;
+    border-radius: 18px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.10);
+  }
+    /* Page inner constrains width and centers all content */
+.page-inner {
+    width: 1024px;              /* unify page width */
+    max-width: 95vw;
+    margin: 0 auto;             /* center regardless of parent flex */
+  }
+  
+  /* Ensure backlog page doesn’t inherit left-justified flex from higher layers */
+  .page-container.backlog-page {
+    display: block !important;  /* break any inherited flex/grid that misaligns */
+  }
+  
+  /* Center the card wrapper no matter what parent does */
+  .backlog-card-wrapper {
+    width: 100%;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: flex-start;
+    margin-top: 24px;
+  }
+  
+  /* Card sizing and centering */
+  .clean-card {
+    width: 720px;               /* a bit larger per your ask */
+    max-width: 95vw;
+    background: #fff;
+    padding: 32px;
+    border-radius: 18px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.1);
+    margin: 0 auto !important;  /* hard center as last resort */
+  }
+  

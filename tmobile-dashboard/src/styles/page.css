@@ -1,0 +1,12 @@
+.page {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+  }
+  
+  .page-inner {
+    width: 100%;
+    max-width: 1300px;     /* This controls consistent width across all pages */
+    padding: 20px 32px 40px;
+  }
+  

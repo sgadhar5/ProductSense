@@ -10,6 +10,11 @@ from openai import OpenAI
 import pandas as pd
 from dotenv import load_dotenv
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import hashlib
+
+def compute_hash(text: str, timestamp: str, source: str):
+    key = f"{source}:{timestamp}:{text}".encode("utf-8")
+    return hashlib.sha256(key).hexdigest()
 
 # ---------------------------------------------------------------------
 # 0️⃣ Load environment

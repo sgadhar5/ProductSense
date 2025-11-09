@@ -8,6 +8,11 @@ from dotenv import load_dotenv
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import praw
 from openai import OpenAI
+import hashlib
+
+def compute_hash(text: str, timestamp: str, source: str):
+    key = f"{source}:{timestamp}:{text}".encode("utf-8")
+    return hashlib.sha256(key).hexdigest()
 
 # ============================================================
 # 0️⃣ Load ENV + OpenAI

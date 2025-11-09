@@ -1,0 +1,39 @@
+.global-header {
+    width: 100vw;               /* FULL width of viewport */
+    background: #ffffff;
+    border-bottom: 1px solid #e5e5e5;
+    position: fixed;            /* FIXED at top */
+    top: 0;
+    left: 0;
+    z-index: 1000;              /* Always above everything */
+  }
+  
+  .header-inner {
+    max-width: 1450px;          /* Centered content, stable width */
+    margin: 0 auto;
+    padding: 15px 32px;
+  
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .brand {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: #6f42c1;
+  }
+  
+  .nav-links a {
+    margin-left: 18px;
+    text-decoration: none;
+    font-weight: 500;
+    color: #333;
+    padding-bottom: 4px;
+  }
+  
+  .nav-links a:hover {
+    border-bottom: 2px solid #6f42c1;
+    color: #6f42c1;
+  }
+  

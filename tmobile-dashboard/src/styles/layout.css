@@ -1,0 +1,17 @@
+/* Force every page to have a consistent centered layout */
+.page-container {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: flex-start;
+  padding: 40px 0;
+  width: 100%;
+  min-height: calc(100vh - 80px); /* leave space for header */
+  background: #a15cd6;            /* subtle gray */
+}
+
+/* Inner content wrapper shared by Dashboard, Backlog, Chat */
+.page-inner {
+  width: 1100px;                /* fixed width for all pages */
+  max-width: 95%;
+  margin: 0 auto;
+}
